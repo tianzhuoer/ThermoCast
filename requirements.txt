@@ -1,0 +1,13 @@
+accelerate
+chronos-forecasting
+datasets
+matplotlib
+numpy
+pandas
+peft
+scipy
+swanlab
+torch>=2.0
+tqdm
+transformers
+

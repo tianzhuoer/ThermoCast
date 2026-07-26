@@ -1,0 +1,49 @@
+# Data and generated datasets
+data/
+dataset_cache/
+*.mat
+*.nc
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.csv
+*.tsv
+
+# Model weights and training artifacts
+checkpoints/
+swanlog/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Images, figures, and documents
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.ipynb
+
+# Python and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.venv/
+venv/
+
+# Local configuration
+.env
+.env.*
+.vscode/
+.idea/
+tmp/
+
