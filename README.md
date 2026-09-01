@@ -1,62 +1,185 @@
-# ThermoCast
+# ThermoTSF-Reprogram
 
-ThermoCast 使用 AUV 历史深度、温度剖面、盐度剖面和季节信息，预测未来多个时刻的温跃层中心深度。核心方法将连续海洋观测重编程到预训练语言模型的嵌入空间，并使用 LoRA 完成参数高效微调。
+This repository contains **ThermoTSF-Reprogram**, the large-language-model-based time-series forecaster used by the **Forecast-to-Reward (F2R)** framework for adaptive thermocline sampling with autonomous underwater vehicles (AUVs).
 
-## 项目结构
+ThermoTSF-Reprogram predicts short-horizon thermocline-center depths from partial, trajectory-dependent conductivity-temperature-depth (CTD) observations. It maps continuous depth, temperature, salinity, and contextual variables into the representation space of a pretrained Qwen3.5-2B model without converting the numerical profiles into text. The forecasts shape rewards during offline F2R policy learning; the forecaster does not select AUV actions and is not deployed onboard.
+
+The companion reinforcement-learning and deployment implementation is available in [F2R policy learning](https://github.com/tianzhuoer/L2R).
+
+## Forecasting task
+
+At each prediction time, the model receives the preceding `K = 32` AUV sampling steps and predicts the thermocline-center depth for the following `H = 5` steps:
 
 ```text
-ThermoCast/
-├── configs/                 # 数据、训练及各模型配置
-├── models/                  # Reprogram-TSF、Time-LLM 与基线网络
-├── trainers/                # 通用训练与验证流程
-├── tsf_data/                # CTD 数据集、特征整理和指标
-├── train_reprogram_TSF.py   # 主方法训练入口
-├── train_*.py               # 其他模型与基线训练入口
-└── requirements.txt
+[depth, partial temperature profile, partial salinity profile] x 32
+                    + seasonal and hydrographic context
+                                      |
+                                      v
+                  five future thermocline-center depths
 ```
 
-数据、预训练权重、检查点、日志和图片不包含在本仓库中。
+Each partial temperature and salinity profile contains 15 depth bins accumulated from measurements along the simulated AUV trajectory. The complete CTD profile is used only to derive future-depth labels.
 
-## 网络框架
+The reference thermocline-center depth is the midpoint of the adjacent depth interval with the largest absolute vertical temperature gradient within the physically relevant depth range of 25--150 m. Output uses the AUV convention of negative depth below the sea surface.
 
-主方法 Reprogram-TSF 在每个时间步分别编码深度、15 维温度剖面和 15 维盐度剖面，保留完整时间分辨率。各模态经过独立线性投影和 prototype cross-attention，被映射到 LLM embedding 空间，并按时间交错组成数值 token。
+## Architecture
 
-季节 prompt 提供领域语义，归一化季节与年内日期通过 `[THERMO]` 位置注入。拼接后的 prompt token 与数值 token 输入 Qwen backbone；backbone 使用 LoRA 微调，最后对数值 token 执行 last/mean pooling，通过 MLP 回归未来 `H` 步温跃层深度。
+ThermoTSF-Reprogram preserves both modality structure and the full temporal resolution of the observation history:
 
-仓库还提供 Time-LLM、文本式 LLM-TSF、Chronos-2、TimesFM、iTransformer、Transformer 和 LSTM 对照模型。
+1. **Modality-specific encoding.** AUV depth, partial temperature, partial salinity, and a nine-dimensional context vector are projected separately.
+2. **Cross-attention reprogramming.** Trainable modality-specific layers align numerical representations with prototypes in the Qwen embedding space.
+3. **Temporally interleaved numerical tokens.** Depth, temperature, and salinity tokens are interleaved by sampling step rather than collapsed across time.
+4. **Seasonal and hydrographic context.** A season-aware task prompt is combined with a reprogrammed context token containing season, day-of-year encodings, and summary statistics of the CTD window.
+5. **LoRA-adapted backbone.** Prompt and numerical tokens are processed jointly by Qwen3.5-2B with low-rank adaptation (LoRA).
+6. **Multi-step regression.** Last and mean pooled numerical-token hidden states are passed to an MLP head that predicts five future depths.
 
-## 使用
+```text
+depth history --------> projection --+
+temperature profiles -> projection --+--> prototype cross-attention
+salinity profiles ----> projection --+             |
+context --------------> projection --+             v
+                                             reprogrammed tokens
+season-aware prompt ---------------------------------+
+                                                      v
+                                             LoRA-adapted Qwen
+                                                      v
+                                       numeric-token last/mean pooling
+                                                      v
+                                         five-step regression head
+```
 
-安装依赖：
+The model is optimized in normalized depth space using Huber loss. Gaussian perturbations are applied to depth, temperature, and salinity during training to improve robustness to sensor noise and interpolation errors.
+
+## Reported validation results
+
+In the accompanying manuscript, ThermoTSF-Reprogram was evaluated on trajectory-dependent partial CTD sequences from the South China Sea. Approximate final validation performance was:
+
+| Metric | ThermoTSF-Reprogram | Representative alternatives |
+|---|---:|---:|
+| MAE | **~12 m** | Chronos-2: ~13--14 m; LSTM: ~14--15 m; Time-LLM: ~15 m |
+| RMSE | **~18 m** | ~19--20 m |
+| sMAPE | **~20%** | ~22--25% |
+
+Horizon-wise validation MAE increased from approximately 10.5 m at `H1` to approximately 13 m at `H5`, while remaining lowest among the reported methods at all five horizons. These values describe the manuscript's validation setting and should not be interpreted as independent test-set or global-ocean generalization results. The forecasts are intended for coarse offline reward shaping, not as direct depth-control commands.
+
+## Repository structure
+
+```text
+.
+|-- train_reprogram_TSF.py       # ThermoTSF-Reprogram entry point
+|-- train_timellm.py             # Time-LLM comparison
+|-- train_chronos2.py            # Chronos-2 comparison
+|-- train_timesfm.py             # TimesFM comparison
+|-- train_itransformer.py        # iTransformer comparison
+|-- train_transformer.py         # Transformer comparison
+|-- train_lstm.py                # LSTM comparison
+|-- train_llm_TSF.py             # text-based LLM comparison
+|-- configs/                     # shared and model-specific settings
+|-- models/                      # forecasters, baselines, and wrappers
+|-- trainers/                    # common training and validation loop
+`-- tsf_data/                    # datasets, collation, and metrics
+```
+
+Data, pretrained weights, checkpoints, logs, and figures are excluded from version control.
+
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-设置 CTD 数据目录和本地 Qwen 模型目录：
+The main model requires Qwen3.5-2B, either from a local directory or through the configured Hugging Face identifier.
+
+## Data preparation
 
 ```bash
-# Linux/macOS
 export THERMOCAST_CTD_PATH=/path/to/CTD
 export THERMOCAST_QWEN_PATH=/path/to/Qwen3.5-2B
-
-# PowerShell
-$env:THERMOCAST_CTD_PATH="D:\path\to\CTD"
-$env:THERMOCAST_QWEN_PATH="D:\path\to\Qwen3.5-2B"
+export THERMOCAST_SPLIT_MANIFEST=/path/to/CTD/split_manifest.json
 ```
 
-训练主方法：
+PowerShell:
 
-```bash
-python train_reprogram_TSF.py --gpu 0
+```powershell
+$env:THERMOCAST_CTD_PATH = "D:\datasets\CTD"
+$env:THERMOCAST_QWEN_PATH = "D:\models\Qwen3.5-2B"
+$env:THERMOCAST_SPLIT_MANIFEST = "D:\datasets\CTD\split_manifest.json"
 ```
 
-训练基线：
+The forecasting and policy-learning repositories share a file-level split manifest. Complete CTD files used for forecaster fine-tuning must remain disjoint from files used to construct F2R policy-training environments. A season-balanced manifest can be generated with `generate_split_manifest.py` in the [F2R repository](https://github.com/tianzhuoer/L2R).
+
+The forecasting dataset excludes AUV field records by default (`AUV_` filename prefix). In the manuscript, Argo and NOAA CTD records were used for forecaster development, while AUV field observations were reserved for experimental comparison.
+
+## Training
+
+Single GPU:
 
 ```bash
+python train_reprogram_TSF.py --mode lora --samples 16800 --gpu 0
+```
+
+Multiple GPUs:
+
+```bash
+accelerate launch --num_processes=<N> train_reprogram_TSF.py --mode lora --samples 16800
+```
+
+| Setting | Default |
+|---|---:|
+| Input history `K` | 32 steps |
+| Forecast horizon `H` | 5 steps |
+| Partial profile size | 15 bins per modality |
+| Target depth range | `[-150, -25] m` |
+| Reprogramming dimension | 64 |
+| Cross-attention heads | 4 |
+| Prototypes | 128 |
+| LoRA rank / alpha | 8 / 16 |
+| Batch size / gradient accumulation | 8 / 8 |
+| Maximum epochs | 100 |
+| Early-stopping patience | 10 epochs, after epoch 50 |
+
+Best checkpoints are written under `checkpoints/reprogram/<variant>-<samples>k/` as `lora_best/` and `head_best.pt`.
+
+## Ablations and comparison models
+
+```bash
+# Frozen Qwen backbone; train reprogramming layers and head
+python train_reprogram_TSF.py --mode head --samples 16800 --gpu 0
+
+# Replace prototype cross-attention with linear projection
+python train_reprogram_TSF.py --mode lora --samples 16800 --gpu 0 --no-reprogram
+
+# Skip the language-model backbone
+python train_reprogram_TSF.py --mode lora --samples 16800 --gpu 0 --no-backbone
+
+# Randomly initialize the Qwen architecture
+python train_reprogram_TSF.py --mode lora --samples 16800 --gpu 0 --random-init
+
+# Add window-specific statistics to the textual prompt
+python train_reprogram_TSF.py --mode lora --samples 16800 --gpu 0 --dynamic-prompt
+```
+
+Comparison entry points include:
+
+```bash
+python train_timellm.py --gpu 0
+python train_chronos2.py --gpu 0
 python train_lstm.py --gpu 0
 python train_itransformer.py --gpu 0
-python train_chronos2.py --gpu 0
 ```
 
-数据窗口、预测长度、训练样本数和其他超参数可在 `configs/` 中修改。训练生成的检查点默认写入 `checkpoints/`。
+## Relationship to F2R
+
+ThermoTSF-Reprogram is trained before F2R policy adaptation and then frozen. During policy learning, its five-step predictions are screened, smoothed, and aggregated to construct a forecast depth for shaped rewards. It does not choose actions. After F2R training, the forecaster and the additional KL reference-network copy are removed; only the lightweight attention-based policy and residual Q-adapter are deployed.
+
+## Scope and reproducibility
+
+- The task predicts a single maximum-gradient thermocline-center depth; it does not estimate thickness, intensity, or multilayer structure.
+- Manuscript data are concentrated in the South China Sea and do not represent global thermocline variability.
+- Reported forecasting results are validation results from the manuscript's current setting.
+- Data and model weights are not included. Users must provide CTD files and verify all applicable licenses.
+- This repository currently has no explicit software license. Obtain permission before reuse.
+
+## Citation
+
+This repository accompanies the manuscript **“LLM-informed forecast-to-reward learning for lightweight ocean thermocline sampling on autonomous underwater vehicles.”** Citation metadata will be added after publication.
