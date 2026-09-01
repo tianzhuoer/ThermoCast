@@ -50,18 +50,6 @@ season-aware prompt ---------------------------------+
 
 The model is optimized in normalized depth space using Huber loss. Gaussian perturbations are applied to depth, temperature, and salinity during training to improve robustness to sensor noise and interpolation errors.
 
-## Reported validation results
-
-In the accompanying manuscript, ThermoTSF-Reprogram was evaluated on trajectory-dependent partial CTD sequences from the South China Sea. Approximate final validation performance was:
-
-| Metric | ThermoTSF-Reprogram | Representative alternatives |
-|---|---:|---:|
-| MAE | **~12 m** | Chronos-2: ~13--14 m; LSTM: ~14--15 m; Time-LLM: ~15 m |
-| RMSE | **~18 m** | ~19--20 m |
-| sMAPE | **~20%** | ~22--25% |
-
-Horizon-wise validation MAE increased from approximately 10.5 m at `H1` to approximately 13 m at `H5`, while remaining lowest among the reported methods at all five horizons. These values describe the manuscript's validation setting and should not be interpreted as independent test-set or global-ocean generalization results. The forecasts are intended for coarse offline reward shaping, not as direct depth-control commands.
-
 ## Repository structure
 
 ```text
@@ -182,4 +170,4 @@ ThermoTSF-Reprogram is trained before F2R policy adaptation and then frozen. Dur
 
 ## Citation
 
-This repository accompanies the manuscript **“LLM-informed forecast-to-reward learning for lightweight ocean thermocline sampling on autonomous underwater vehicles.”** Citation metadata will be added after publication.
+To be updated.
